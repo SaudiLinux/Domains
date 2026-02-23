@@ -2,26 +2,29 @@
 # -*- coding: utf-8 -*-
 
 from rich.console import Console
-from rich.text import Text
 from rich.panel import Panel
 from rich import print as rprint
 
 console = Console()
 
 def display_banner():
+    """Display tool banner"""
     banner = """
 [bold cyan]
-██████╗  ██████╗ ███╗   ███╗ █████╗ ██╗███╗   ██╗
-██╔══██╗██╔═══██╗████╗ ████║██╔══██╗██║████╗  ██║
-██║  ██║██║   ██║██╔████╔██║███████║██║██╔██╗ ██║
-██║  ██║██║   ██║██║╚██╔╝██║██╔══██║██║██║╚██╗██║
-██████╔╝╚██████╔╝██║ ╚═╝ ██║██║  ██║██║██║ ╚████║
-╚═════╝  ╚═════╝ ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝
-[/bold cyan]"""
+╔═══════════════════════════════════════════════════════════╗
+║                                                           ║
+║   ██████╗  ██████╗ ███╗   ███╗ █████╗ ██╗███╗   ██╗     ║
+║   ██╔══██╗██╔═══██╗████╗ ████║██╔══██╗██║████╗  ██║     ║
+║   ██║  ██║██║   ██║██╔████╔██║███████║██║██╔██╗ ██║     ║
+║   ██║  ██║██║   ██║██║╚██╔╝██║██╔══██║██║██║╚██╗██║     ║
+║   ██████╔╝╚██████╔╝██║ ╚═╝ ██║██║  ██║██║██║ ╚████║     ║
+║   ╚═════╝  ╚═════╝ ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝     ║
+║                                                           ║
+║        [bold yellow]Advanced Domain Reconnaissance Tool[/bold yellow]           ║
+║           [bold green]Version 2.0 - Enhanced Edition[/bold green]              ║
+║                                                           ║
+╚═══════════════════════════════════════════════════════════╝
+[/bold cyan]
+    [dim]Author: SayerLinux | Enhanced with POC Detection[/dim]
+    """
     console.print(banner)
-    console.print(Panel.fit(
-        "[bold white]Advanced Domain Reconnaissance Tool[/bold white]\n"
-        "[dim]Author: [cyan]SayerLinux[/cyan] | For legal use only[/dim]",
-        border_style="cyan"
-    ))
-    console.print()

@@ -1,202 +1,129 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import dns.resolver
 import requests
-import threading
-import queue
+import concurrent.futures
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
+from rich.table import Table
 
 console = Console()
 
 class SubdomainEnumerator:
-    def __init__(self, domain, threads=10, timeout=30, wordlist=None, delay=0.0):
+    """Subdomain enumeration module"""
+    
+    def __init__(self, domain, threads=10, timeout=10, wordlist=None, delay=0):
         self.domain = domain
         self.threads = threads
         self.timeout = timeout
-        self.wordlist = wordlist
         self.delay = delay
-        self.found_subdomains = set()
-        self.lock = threading.Lock()
-
-        # Built-in wordlist
-        self.default_wordlist = [
-            'www', 'mail', 'ftp', 'smtp', 'pop', 'imap', 'webmail', 'remote',
-            'vpn', 'ssh', 'rdp', 'dev', 'test', 'staging', 'api', 'admin',
-            'portal', 'login', 'app', 'apps', 'secure', 'mx', 'blog', 'shop',
-            'store', 'news', 'static', 'cdn', 'media', 'img', 'images', 'assets',
-            'upload', 'uploads', 'download', 'downloads', 'docs', 'help', 'support',
-            'forum', 'forums', 'community', 'wiki', 'kb', 'status', 'monitor',
-            'git', 'gitlab', 'github', 'jenkins', 'jira', 'confluence', 'redmine',
-            'grafana', 'kibana', 'elastic', 'db', 'database', 'mysql', 'postgres',
-            'redis', 'mongo', 'cassandra', 'oracle', 'mssql', 'sql', 'backup',
-            'ns1', 'ns2', 'ns3', 'dns', 'dns1', 'dns2', 'proxy', 'reverse',
-            'load', 'lb', 'haproxy', 'nginx', 'apache', 'web', 'web1', 'web2',
-            'server', 'server1', 'server2', 'node', 'node1', 'node2', 'cloud',
-            'aws', 'azure', 'gcp', 'k8s', 'kubernetes', 'docker', 'container',
-            'ci', 'cd', 'build', 'deploy', 'prod', 'production', 'live',
-            'beta', 'alpha', 'demo', 'preview', 'sandbox', 'lab', 'research',
-            'internal', 'intranet', 'extranet', 'corp', 'corporate', 'office',
-            'hr', 'crm', 'erp', 'accounting', 'finance', 'sales', 'marketing',
-            'analytics', 'tracking', 'metrics', 'stats', 'reports', 'dashboard',
-            'management', 'mgmt', 'panel', 'cpanel', 'plesk', 'whm', 'webmin',
-            'phpmyadmin', 'pma', 'adminer', 'wp-admin', 'webadmin', 'sysadmin',
-            'm', 'mobile', 'wap', 'touch', 'pwa', 'socket', 'ws', 'websocket',
-            'api2', 'apiv2', 'v1', 'v2', 'v3', 'rest', 'graphql', 'grpc',
-            'auth', 'oauth', 'sso', 'ldap', 'ad', 'accounts', 'account',
-            'billing', 'pay', 'payment', 'checkout', 'cart', 'order', 'orders',
-            'search', 'cache', 'assets2', 'old', 'new', 'legacy', 'archive',
-            'email', 'newsletter', 'smtp2', 'bounce', 'lists', 'autodiscover',
-            'autoconfig', 'cpcontacts', 'cpcalendars', 'webdisk', 'whois',
+        self.wordlist = wordlist or self._get_default_wordlist()
+        self.found_subdomains = []
+        
+    def _get_default_wordlist(self):
+        """Get default subdomain wordlist"""
+        return [
+            'www', 'mail', 'ftp', 'localhost', 'webmail', 'smtp', 'pop', 'ns1', 'webdisk',
+            'ns2', 'cpanel', 'whm', 'autodiscover', 'autoconfig', 'm', 'imap', 'test',
+            'ns', 'blog', 'pop3', 'dev', 'www2', 'admin', 'forum', 'news', 'vpn',
+            'ns3', 'mail2', 'new', 'mysql', 'old', 'lists', 'support', 'mobile', 'mx',
+            'static', 'docs', 'beta', 'shop', 'sql', 'secure', 'demo', 'cp', 'calendar',
+            'wiki', 'web', 'media', 'email', 'images', 'img', 'www1', 'intranet',
+            'portal', 'video', 'sip', 'dns2', 'api', 'cdn', 'stats', 'dns1', 'ns4',
+            'www3', 'dns', 'search', 'staging', 'server', 'mx1', 'chat', 'wap', 'my',
+            'svn', 'mail1', 'sites', 'proxy', 'ads', 'host', 'crm', 'cms', 'backup',
+            'mx2', 'lyncdiscover', 'info', 'apps', 'download', 'remote', 'db', 'forums',
+            'store', 'relay', 'files', 'newsletter', 'app', 'live', 'owa', 'en', 'start',
+            'sms', 'office', 'exchange', 'ipv4', 'web2', 'panel', 'dashboard', 'gateway'
         ]
-
-    def passive_crtsh(self):
-        """Enumerate subdomains via crt.sh"""
-        console.print(f"  [cyan]→[/cyan] Querying crt.sh...")
+    
+    def enumerate(self):
+        """Enumerate subdomains"""
+        console.print(f"[yellow]⟳ جاري البحث عن النطاقات الفرعية لـ {self.domain}...[/yellow]")
+        
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            console=console
+        ) as progress:
+            task = progress.add_task("[cyan]فحص النطاقات الفرعية...", total=len(self.wordlist))
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.threads) as executor:
+                futures = []
+                for subdomain in self.wordlist:
+                    future = executor.submit(self._check_subdomain, subdomain)
+                    futures.append(future)
+                
+                for future in concurrent.futures.as_completed(futures):
+                    result = future.result()
+                    if result:
+                        self.found_subdomains.append(result)
+                    progress.advance(task)
+                    if self.delay > 0:
+                        time.sleep(self.delay)
+        
+        self._display_results()
+        return self.found_subdomains
+    
+    def _check_subdomain(self, subdomain):
+        """Check if subdomain exists"""
+        full_domain = f"{subdomain}.{self.domain}"
         try:
-            url = f"https://crt.sh/?q=%.{self.domain}&output=json"
-            resp = requests.get(url, timeout=self.timeout)
-            if resp.status_code == 200:
-                data = resp.json()
-                for entry in data:
-                    name = entry.get('name_value', '')
-                    for sub in name.split('\n'):
-                        sub = sub.strip().lower()
-                        if sub.endswith(f".{self.domain}") or sub == self.domain:
-                            with self.lock:
-                                self.found_subdomains.add(sub)
-        except Exception as e:
-            console.print(f"  [yellow]![/yellow] crt.sh error: {e}")
-
-    def passive_hackertarget(self):
-        """Enumerate subdomains via HackerTarget API"""
-        console.print(f"  [cyan]→[/cyan] Querying HackerTarget...")
-        try:
-            url = f"https://api.hackertarget.com/hostsearch/?q={self.domain}"
-            resp = requests.get(url, timeout=self.timeout)
-            if resp.status_code == 200 and 'error' not in resp.text.lower():
-                for line in resp.text.splitlines():
-                    parts = line.split(',')
-                    if parts:
-                        sub = parts[0].strip().lower()
-                        if sub.endswith(f".{self.domain}") or sub == self.domain:
-                            with self.lock:
-                                self.found_subdomains.add(sub)
-        except Exception as e:
-            console.print(f"  [yellow]![/yellow] HackerTarget error: {e}")
-
-    def passive_rapiddns(self):
-        """Enumerate subdomains via RapidDNS"""
-        console.print(f"  [cyan]→[/cyan] Querying RapidDNS...")
-        try:
-            url = f"https://rapiddns.io/subdomain/{self.domain}?full=1"
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            resp = requests.get(url, headers=headers, timeout=self.timeout)
-            if resp.status_code == 200:
-                import re
-                pattern = rf'([a-zA-Z0-9\-\_\.]+\.{re.escape(self.domain)})'
-                matches = re.findall(pattern, resp.text)
-                for match in matches:
-                    with self.lock:
-                        self.found_subdomains.add(match.lower())
-        except Exception as e:
-            console.print(f"  [yellow]![/yellow] RapidDNS error: {e}")
-
-    def passive_alienvault(self):
-        """Enumerate subdomains via AlienVault OTX"""
-        console.print(f"  [cyan]→[/cyan] Querying AlienVault OTX...")
-        try:
-            url = f"https://otx.alienvault.com/api/v1/indicators/domain/{self.domain}/passive_dns"
-            resp = requests.get(url, timeout=self.timeout)
-            if resp.status_code == 200:
-                data = resp.json()
-                for entry in data.get('passive_dns', []):
-                    hostname = entry.get('hostname', '').lower()
-                    if hostname.endswith(f".{self.domain}") or hostname == self.domain:
-                        with self.lock:
-                            self.found_subdomains.add(hostname)
-        except Exception as e:
-            console.print(f"  [yellow]![/yellow] AlienVault error: {e}")
-
-    def passive_urlscan(self):
-        """Enumerate subdomains via urlscan.io"""
-        console.print(f"  [cyan]→[/cyan] Querying urlscan.io...")
-        try:
-            url = f"https://urlscan.io/api/v1/search/?q=domain:{self.domain}&size=100"
-            resp = requests.get(url, timeout=self.timeout)
-            if resp.status_code == 200:
-                data = resp.json()
-                import re
-                for result in data.get('results', []):
-                    page_url = result.get('page', {}).get('domain', '')
-                    if page_url.endswith(f".{self.domain}") or page_url == self.domain:
-                        with self.lock:
-                            self.found_subdomains.add(page_url.lower())
-        except Exception as e:
-            console.print(f"  [yellow]![/yellow] urlscan.io error: {e}")
-
-    def resolve_subdomain(self, subdomain):
-        """Resolve a subdomain via DNS"""
-        if self.delay > 0:
-            time.sleep(self.delay)
-        try:
-            fqdn = f"{subdomain}.{self.domain}"
-            answers = dns.resolver.resolve(fqdn, 'A', lifetime=5)
-            if answers:
-                with self.lock:
-                    self.found_subdomains.add(fqdn)
-                return fqdn
-        except Exception:
+            for protocol in ['https', 'http']:
+                url = f"{protocol}://{full_domain}"
+                response = requests.get(
+                    url, 
+                    timeout=self.timeout, 
+                    verify=False, 
+                    allow_redirects=True,
+                    headers={'User-Agent': 'Mozilla/5.0'}
+                )
+                
+                if response.status_code < 500:
+                    return {
+                        'subdomain': full_domain,
+                        'url': url,
+                        'status_code': response.status_code,
+                        'content_length': len(response.content),
+                        'title': self._extract_title(response.text)
+                    }
+        except:
             pass
         return None
-
-    def active_bruteforce(self):
-        """Active DNS brute force"""
-        console.print(f"  [cyan]→[/cyan] Running DNS brute force...")
-        wordlist = self.default_wordlist
-        if self.wordlist:
-            try:
-                with open(self.wordlist, 'r', errors='ignore') as f:
-                    wordlist = [line.strip() for line in f if line.strip()]
-            except Exception as e:
-                console.print(f"  [yellow]![/yellow] Wordlist error: {e}")
-
-        count = 0
-        with ThreadPoolExecutor(max_workers=self.threads) as executor:
-            futures = {executor.submit(self.resolve_subdomain, word): word for word in wordlist}
-            for future in as_completed(futures):
-                result = future.result()
-                if result:
-                    count += 1
-
-        console.print(f"  [green]✓[/green] Brute force found {count} subdomains")
-
-    def enumerate(self):
-        """Run all enumeration methods"""
-        # Passive methods
-        self.passive_crtsh()
-        self.passive_hackertarget()
-        self.passive_rapiddns()
-        self.passive_alienvault()
-        self.passive_urlscan()
-
-        # Active brute force
-        self.active_bruteforce()
-
-        # Resolve all found subdomains and get IPs
-        resolved = {}
+    
+    def _extract_title(self, html):
+        """Extract page title from HTML"""
+        try:
+            import re
+            title = re.search(r'<title>(.*?)</title>', html, re.IGNORECASE)
+            if title:
+                return title.group(1).strip()[:50]
+        except:
+            pass
+        return 'N/A'
+    
+    def _display_results(self):
+        """Display found subdomains"""
+        if not self.found_subdomains:
+            console.print("[yellow]⚠ لم يتم العثور على نطاقات فرعية[/yellow]")
+            return
+        
+        table = Table(title=f"[bold green]تم العثور على {len(self.found_subdomains)} نطاق فرعي[/bold green]")
+        table.add_column("النطاق الفرعي", style="cyan", width=30)
+        table.add_column("الرابط", style="blue", width=40)
+        table.add_column("الحالة", style="green", width=10)
+        table.add_column("العنوان", style="white", width=30)
+        
         for sub in self.found_subdomains:
-            try:
-                answers = dns.resolver.resolve(sub, 'A', lifetime=5)
-                resolved[sub] = [str(r) for r in answers]
-            except Exception:
-                resolved[sub] = []
-
-        console.print(f"  [green]✓[/green] Total unique subdomains found: [bold]{len(self.found_subdomains)}[/bold]")
-
-        return {
-            'total': len(self.found_subdomains),
-            'subdomains': resolved
-        }
+            status_color = 'green' if sub['status_code'] == 200 else 'yellow'
+            table.add_row(
+                sub['subdomain'],
+                sub['url'],
+                f"[{status_color}]{sub['status_code']}[/{status_color}]",
+                sub['title']
+            )
+        
+        console.print(table)

@@ -30,6 +30,7 @@ from modules.url_discovery import URLDiscovery
 from modules.admin_finder import AdminFinder
 from modules.attack_surface import AttackSurfaceMapper
 from modules.vulnerability_scanner import VulnerabilityScanner
+from modules.zeroday_scanner import ZeroDayScanner          # ← NEW
 from modules.report_generator import ReportGenerator
 from modules.utils import check_requirements, is_valid_domain, setup_logging, clean_domain
 
@@ -47,6 +48,8 @@ Examples:
   python3 domain.py -d example.com --full
   python3 domain.py -d example.com --info --subdomains
   python3 domain.py -d example.com --vulns --threads 20
+  python3 domain.py -d example.com --zeroday
+  python3 domain.py -d example.com --zeroday --nvd-key YOUR_KEY
   python3 domain.py -d example.com --full --output results/report
         """
     )
@@ -58,19 +61,23 @@ Examples:
     parser.add_argument('--full', action='store_true', help='Run all scan modules')
 
     # Module selection
-    parser.add_argument('--info', action='store_true', help='Gather basic domain information')
-    parser.add_argument('--subdomains', action='store_true', help='Enumerate subdomains')
-    parser.add_argument('--urls', action='store_true', help='Discover hidden URLs')
-    parser.add_argument('--admin-finder', action='store_true', help='Find admin pages')
+    parser.add_argument('--info',           action='store_true', help='Gather basic domain information')
+    parser.add_argument('--subdomains',     action='store_true', help='Enumerate subdomains')
+    parser.add_argument('--urls',           action='store_true', help='Discover hidden URLs')
+    parser.add_argument('--admin-finder',   action='store_true', help='Find admin pages')
     parser.add_argument('--attack-surface', action='store_true', help='Map attack surface')
-    parser.add_argument('--vulns', action='store_true', help='Scan for vulnerabilities')
+    parser.add_argument('--vulns',          action='store_true', help='Scan for vulnerabilities (known)')
+    parser.add_argument('--zeroday',        action='store_true',  # ← NEW
+                        help='Run zero-day / advanced vulnerability discovery')
 
     # Advanced options
-    parser.add_argument('--threads', type=int, default=10, help='Number of threads (default: 10)')
-    parser.add_argument('--timeout', type=int, default=30, help='Connection timeout in seconds (default: 30)')
-    parser.add_argument('--user-agent', help='Custom User-Agent string')
-    parser.add_argument('--wordlist', help='Custom wordlist file for brute forcing')
-    parser.add_argument('--delay', type=float, default=0.0, help='Delay between requests in seconds')
+    parser.add_argument('--threads',    type=int,   default=10,  help='Number of threads (default: 10)')
+    parser.add_argument('--timeout',    type=int,   default=30,  help='Connection timeout in seconds (default: 30)')
+    parser.add_argument('--user-agent',             help='Custom User-Agent string')
+    parser.add_argument('--wordlist',               help='Custom wordlist file for brute forcing')
+    parser.add_argument('--delay',      type=float, default=0.0, help='Delay between requests in seconds')
+    parser.add_argument('--nvd-key',    default='',              # ← NEW
+                        help='NIST NVD API key for higher CVE lookup rate-limit')
 
     return parser.parse_args()
 
@@ -115,24 +122,33 @@ def main():
         args.output = os.path.join(output_dir, f"{domain.replace('.', '_')}_{timestamp}")
 
     # Initialize modules
-    domain_info = DomainInfo(domain, args.timeout, args.user_agent)
+    domain_info    = DomainInfo(domain, args.timeout, args.user_agent)
     subdomain_enum = SubdomainEnumerator(domain, args.threads, args.timeout, args.wordlist, args.delay)
-    url_discovery = URLDiscovery(domain, args.threads, args.timeout, args.wordlist, args.delay)
-    admin_finder = AdminFinder(domain, args.threads, args.timeout, args.wordlist, args.delay)
+    url_discovery  = URLDiscovery(domain, args.threads, args.timeout, args.wordlist, args.delay)
+    admin_finder   = AdminFinder(domain, args.threads, args.timeout, args.wordlist, args.delay)
     attack_surface = AttackSurfaceMapper(domain, args.threads, args.timeout)
-    vuln_scanner = VulnerabilityScanner(domain, args.threads, args.timeout)
-    report_gen = ReportGenerator(domain, args.output + '.txt')
+    vuln_scanner   = VulnerabilityScanner(domain, args.threads, args.timeout)
+    zd_scanner     = ZeroDayScanner(                          # ← NEW
+                         domain,
+                         threads=args.threads,
+                         timeout=args.timeout,
+                         user_agent=args.user_agent,
+                         nvd_api_key=getattr(args, 'nvd_key', ''),
+                     )
+    report_gen     = ReportGenerator(domain, args.output + '.txt')
 
     # Determine which modules to run
-    run_info = args.info or args.full
+    run_info       = args.info or args.full
     run_subdomains = args.subdomains or args.full
-    run_urls = args.urls or args.full
-    run_admin = args.admin_finder or args.full
-    run_attack = args.attack_surface or args.full
-    run_vulns = args.vulns or args.full
+    run_urls       = args.urls or args.full
+    run_admin      = args.admin_finder or args.full
+    run_attack     = args.attack_surface or args.full
+    run_vulns      = args.vulns or args.full
+    run_zeroday    = args.zeroday or args.full             # ← NEW
 
     # If no specific module is selected, run basic info gathering
-    if not any([run_info, run_subdomains, run_urls, run_admin, run_attack, run_vulns]):
+    if not any([run_info, run_subdomains, run_urls, run_admin,
+                run_attack, run_vulns, run_zeroday]):
         run_info = True
 
     # Start scan
@@ -148,36 +164,42 @@ def main():
 
     # Domain Information
     if run_info:
-        console.print("\n[bold cyan]━━━ [1/6] Domain Information ━━━[/bold cyan]")
+        console.print("\n[bold cyan] [1/7] Domain Information [/bold cyan]")
         results['domain_info'] = domain_info.gather_info()
 
     # Subdomain Enumeration
     if run_subdomains:
-        console.print("\n[bold cyan]━━━ [2/6] Subdomain Enumeration ━━━[/bold cyan]")
+        console.print("\n[bold cyan] [2/7] Subdomain Enumeration [/bold cyan]")
         results['subdomains'] = subdomain_enum.enumerate()
 
     # URL Discovery
     if run_urls:
-        console.print("\n[bold cyan]━━━ [3/6] URL Discovery ━━━[/bold cyan]")
+        console.print("\n[bold cyan] [3/7] URL Discovery [/bold cyan]")
         results['urls'] = url_discovery.discover()
 
     # Admin Finder
     if run_admin:
-        console.print("\n[bold cyan]━━━ [4/6] Admin Page Finder ━━━[/bold cyan]")
+        console.print("\n[bold cyan] [4/7] Admin Page Finder [/bold cyan]")
         results['admin_pages'] = admin_finder.find()
 
     # Attack Surface Mapping
     if run_attack:
-        console.print("\n[bold cyan]━━━ [5/6] Attack Surface Mapping ━━━[/bold cyan]")
+        console.print("\n[bold cyan] [5/7] Attack Surface Mapping [/bold cyan]")
         results['attack_surface'] = attack_surface.map()
 
-    # Vulnerability Scanning
+    # Vulnerability Scanning (classic)
     if run_vulns:
-        console.print("\n[bold cyan]━━━ [6/6] Vulnerability Scanning ━━━[/bold cyan]")
+        console.print("\n[bold cyan] [6/7] Vulnerability Scanning (Classic) [/bold cyan]")
         results['vulnerabilities'] = vuln_scanner.scan()
 
+    # ── Zero-Day Discovery ──────────────────────────────────────────────
+    if run_zeroday:
+        console.print("\n[bold red] [7/7] Zero-Day Vulnerability Discovery [/bold red]")
+        results['zeroday'] = zd_scanner.scan()
+    # ───────────────────────────────────────────────────────────────────
+
     # Generate reports
-    console.print("\n[bold cyan]━━━ Generating Reports ━━━[/bold cyan]")
+    console.print("\n[bold cyan] Generating Reports [/bold cyan]")
     report_gen.generate(results)
 
     # Calculate scan duration
@@ -186,11 +208,13 @@ def main():
     minutes, seconds = divmod(remainder, 60)
 
     # Display scan summary
+    zd_count = len(results.get('zeroday', []))
     console.print(Panel.fit(
-        f"[bold green]✓ Scan Completed![/bold green]\n\n"
+        f"[bold green] Scan Completed![/bold green]\n\n"
         f"[white]Target:[/white] [bold cyan]{domain}[/bold cyan]\n"
         f"[white]Duration:[/white] {int(hours)}h {int(minutes)}m {int(seconds)}s\n"
-        f"[white]Reports saved to:[/white] [bold]{args.output}.md[/bold]",
+        + (f"[bold red]Zero-Day findings:[/bold red] {zd_count}\n" if run_zeroday else "")
+        + f"[white]Reports saved to:[/white] [bold]{args.output}.md[/bold]",
         title="[bold green]Scan Complete[/bold green]",
         border_style="green"
     ))
@@ -199,7 +223,7 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        console.print("\n\n[bold red]⚠ Scan interrupted by user. Exiting...[/bold red]")
+        console.print("\n\n[bold red] Scan interrupted by user. Exiting...[/bold red]")
         sys.exit(0)
     except Exception as e:
         console.print(f"\n[bold red]Critical Error: {str(e)}[/bold red]")
